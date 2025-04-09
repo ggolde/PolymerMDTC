@@ -1,0 +1,134 @@
+# measure thermal conductivity via direct thermostating using fix langevin (x-axis)
+# initialization
+log tc_x_lav.log
+units real
+atom_style full
+boundary p p p
+
+# styles
+pair_style lj/charmm/coul/long 8.0 12.0
+kspace_style pppm 1e-6
+dielectric 1.000000
+bond_style harmonic
+angle_style harmonic
+dihedral_style fourier
+improper_style cvff
+special_bonds amber
+pair_modify mix arithmetic
+neighbor 2.0 bin
+neigh_modify delay 0 every 1 check yes
+
+# system definition
+read_data ../final.data
+# do not reset velocities
+
+# vars
+variable dt equal 1.0
+variable tLog equal 1000
+variable nEvery equal 10
+variable nRepeat equal 100
+variable boolDump equal 0
+variable tDump equal 1000
+
+variable tPreeq equal 10000
+variable tPrerun equal 10000
+variable tDelay equal 1000
+variable tTCrun equal 1000000
+
+# desiered temperature difference
+variable Tavg equal 300.0
+variable TempDiff equal 30.0
+variable Thi equal ${Tavg}+(${TempDiff}/2)
+variable Tlo equal ${Tavg}-(${TempDiff}/2)
+
+# defining regions
+variable hot_lo equal (lx*0)+xlo
+variable hot_hi equal (lx*0.05)+xlo
+variable cold_lo equal (lx*0.50)+xlo
+variable cold_hi equal (lx*0.55)+xlo
+
+# define heating and cooling block regions
+region hot block ${hot_lo} ${hot_hi} INF INF INF INF units box
+region cold block ${cold_lo} ${cold_hi} INF INF INF INF units box
+compute Thot all temp/region hot
+compute Tcold all temp/region cold
+
+# STEP 1 - 1st equilibration (nve)
+# 1a - thermo output for md1
+thermo_style custom step time temp c_Thot c_Tcold press enthalpy etotal ke pe
+thermo_modify colname c_Thot Temp_hot colname c_Tcold Temp_cold
+thermo_modify flush yes
+thermo ${tLog}
+
+# 1b - nve equilibration
+timestep ${dt}
+fix md1 all nve
+run ${tPreeq}
+unfix md1
+
+# STEP 2 - pre run
+# 2a - impose nve
+fix md2 all nve
+
+# 2b - impose thermostating
+fix hot all langevin ${Thi} ${Thi} 100.0 57485 tally yes
+fix cold all langevin ${Tlo} ${Tlo} 100.0 12490 tally yes 
+fix_modify hot temp Thot
+fix_modify cold temp Tcold
+# calculate tdiff of regions
+variable tdiff equal c_Thot-c_Tcold
+
+# 2c - thermo output
+thermo_style custom step time temp c_Thot c_Tcold f_hot f_cold v_tdiff press enthalpy etotal ke pe
+thermo_modify colname c_Thot Temp_hot colname c_Tcold Temp_cold &
+              colname f_hot E_hot colname f_cold E_cold &
+              colname v_tdiff dTemp_step
+thermo_modify flush yes
+thermo ${tLog}
+
+# 2d - pre run
+run ${tPrerun}
+unfix md2
+
+# STEP 3 - md for tc caluclation
+# 3a - impose nve
+fix md3 all nve
+
+# 3b - calculate and output thermal profile
+compute ke all ke/atom
+variable temp atom c_ke/(1.5*0.001987204)
+compute layers all chunk/atom bin/1d x lower 0.05 units reduced
+fix bins all ave/chunk ${nEvery} ${nRepeat} ${tLog} layers v_temp file Tprofile_x_lav.dat
+
+# 3c - reset thermostats to zero energy accumulation
+fix hot all langevin ${Thi} ${Thi} 100.0 57485 tally yes
+fix cold all langevin ${Tlo} ${Tlo} 100.0 12490 tally yes 
+fix_modify hot temp Thot
+fix_modify cold temp Tcold
+
+# 3c - compute average tdiff
+fix ave all ave/time ${nEvery} ${nRepeat} ${tLog} v_tdiff ave running
+
+# 3d - time delay run
+variable aTime equal time
+variable start_time equal ${aTime}
+run ${tDelay}
+
+# 3f - calculate kappa
+variable kappa_inst equal (0.5*(abs(f_hot)+abs(f_cold))/(time-${start_time})/(ly*lz)/2.0)*(lx/2.0)/v_tdiff*69478.5785
+variable kappa equal (0.5*(abs(f_hot)+abs(f_cold))/(time-${start_time})/(ly*lz)/2.0)*(lx/2.0)/f_ave*69478.5785
+
+# 3e - thermo out
+# dump dump_tc all custom 1000 dump.tc_x_ehex.lammpstrj id type mol x y z ix iy iz vx vy vz
+thermo_style custom step time v_kappa v_kappa_inst c_Thot c_Tcold v_tdiff f_ave temp press enthalpy etotal ke pe
+thermo_modify colname v_kappa kappa colname v_kappa_inst kappa_inst & 
+              colname c_Thot Temp_hot colname c_Tcold Temp_cold &
+              colname v_tdiff dTemp_step colname f_ave dTemp
+thermo_modify flush yes
+thermo ${tLog}
+
+# 2g - md run for kappa calculation
+# optional traj dump
+if "${boolDump} == 1" then &
+    "dump tc_dump all atom ${tDump} dump.tc_x.lammpstrj"
+run ${tTCrun}

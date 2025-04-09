@@ -1,0 +1,84 @@
+# measure thermal conductivity with fix thermal/conductivity without shake constraints using the traditional Muller Plathe method (x-axis)
+# initialization
+log tc_x_mp.log
+units real
+atom_style full
+boundary p p p
+
+# styles
+pair_style lj/charmm/coul/long 8.0 12.0
+kspace_style pppm 1e-6
+dielectric 1.000000
+bond_style harmonic
+angle_style harmonic
+dihedral_style fourier
+improper_style cvff
+special_bonds amber
+pair_modify mix arithmetic
+neighbor 2.0 bin
+neigh_modify delay 0 every 1 check yes
+
+# system definition
+read_data ../final.data
+
+variable T equal 300.0
+variable dt equal 0.5
+
+# pre define kappa
+variable kappa_inst equal 0
+variable kappa equal 0
+
+# reset velocities
+velocity all create $T 43265475 rot yes mom yes dist gaussian
+
+# STEP 1 - 1st equilbration (nvt)
+thermo_style custom step time etotal ke pe temp press enthalpy 
+thermo 1000
+
+# 1b - initial nvt equilibration without shake constrainsts
+timestep ${dt}
+fix md1 all nvt temp $T $T 100.0
+run 20000
+unfix md1
+
+# STEP 2 - preMD and setup
+# 2a - impose nve
+fix md2 all nve
+
+# 2b - set up tc fixes and computes
+compute KE all ke/atom
+variable temp atom c_KE/(1.5*0.001987204)
+
+compute layers all chunk/atom bin/1d x lower 0.05 units reduced
+fix bins all ave/chunk 10 100 1000 layers v_temp file Tprofile_x_mp.dat
+
+variable tdiff equal f_bins[11][3]-f_bins[1][3]
+variable Thot equal f_bins[11][3]
+variable Tcold equal f_bins[1][3]
+
+# 2c - implement MP fix to swap ke of atoms (number of swaps?)
+fix mp all thermal/conductivity 20 x 20 swap 1
+
+# 2d - prerun
+run 50000
+
+# STEP 3 - MD for tc
+# 3a - reset fix tc to zero energy accumulation (why?)
+fix mp all thermal/conductivity 20 x 20 swap 1
+fix ave all ave/time 1 1 1000 v_tdiff ave running
+
+# 3b - thermo out
+# dump dump_tc all custom 1000 dump.tc_x_mp.lammpstrj id type mol x y z ix iy iz vx vy vz
+thermo_style custom step time v_kappa v_kappa_inst v_Thot v_Tcold v_tdiff f_ave temp press enthalpy etotal ke pe
+thermo_modify colname v_kappa kappa colname v_kappa_inst kappa_inst colname v_Thot Temp_hot colname v_Tcold Temp_cold colname v_tdiff dTemp_step colname f_ave dTemp
+thermo_modify flush yes
+thermo 1000
+
+# 3c - calc kappa
+variable start_time equal time
+variable offset equal 1e-6
+variable kappa_inst equal (f_mp/(time-${start_time}+${offset})/(lx*ly)/2.0)*(lz/2.0)/v_tdiff*69478.5785
+variable kappa equal (f_mp/(time-${start_time}+${offset})/(lx*ly)/2.0)*(lz/2.0)/f_ave*69478.5785
+
+# 3 - md run for kappa calculation
+run 1000000

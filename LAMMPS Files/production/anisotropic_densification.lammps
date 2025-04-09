@@ -1,0 +1,355 @@
+# Griffin's "WIP" 21-step production protocol for nanofiber cells
+# based off the 21 step production protocol in Larsen et al. (https://doi.org/10.1021/ma200345v)
+# anisotropic pressure is applied during pressurization and decompression steps in the x and y direction 
+
+# initialization
+log production.log
+units real
+atom_style full
+boundary p p p
+
+# styles
+pair_style lj/charmm/coul/long 8.0 12.0
+kspace_style pppm 1e-6
+dielectric 1.000000
+bond_style harmonic
+angle_style harmonic
+dihedral_style fourier
+improper_style cvff
+special_bonds amber
+pair_modify mix arithmetic
+neighbor 3.0 bin
+neigh_modify delay 0 every 1 check yes
+
+# system definition
+read_data input.data
+
+# variables for run times and conditions
+# global
+variable dt equal 1.0
+variable tLog equal 1000
+variable tDump equal 1000
+variable maxP equal 5000.0
+variable pressRunSegments equal 5000
+variable boolRestartFiles equal 0
+variable boolDumpMinimization equal 0
+# stage 0 - pre MD
+variable dtPre equal 0.1
+variable tS0_pre equal 5000         # 1x dt=dtPre
+variable tS0_nvt equal 50000        # 1x dt=dt
+variable tS0_hot equal 50000        # 1x
+variable tempS0_hot equal 600.0
+# stage 1 - compression
+variable tS1_nvt equal 100000       # 4x
+variable tS1_hot equal 50000        # 4x
+variable tempS1_hot equal 600.0
+variable tS1_press equal 100000     # 4x
+variable fracPress1 equal 0.1
+variable fracPress2 equal 0.6
+variable fracPress3 equal 0.8
+# stage 2 - decompression
+variable tS2_nvt equal 10000        # 3x
+variable tS2_hot equal 5000         # 3x
+variable tempS2_hot equal 600.0
+variable tS2_press equal 5000       # 3x
+variable fracDepress1 equal 0.5
+variable fracDepress2 equal 0.1
+variable fracDepress3 equal 0.01
+# stage 3 - annealing & equilibration
+variable pressS3 equal 1.0
+variable tEq equal 800000           # 1x
+# total simulation time of 5k at 0.1 fs + 1460k at 1.0 fs = 1.4605 ns
+# with tDump of 1k, 1465 frames
+
+# thermodynamic data output
+thermo_style custom step time temp press enthalpy etotal ke pe ebond eangle edihed eimp evdwl ecoul elong etail vol lx ly lz density pxx pyy pzz pxy pxz pyz
+thermo_modify flush yes
+thermo ${tLog}
+
+# restart files (optional)
+if "${boolRestartFiles} == 1" then & 
+    "restart 200000 md.rst"
+
+# energy minimization
+# dump is optional
+if "${boolDumpMinimization} == 1" then &
+    "dump min_dump all atom 1000 dump.min.lammpstrj"
+min_style cg
+minimize 0.000100 0.000001 10000 100000
+if "${boolDumpMinimization} == 1" then &
+    "undump min_dump"
+reset_timestep 0
+
+# md trajectory files
+dump dump1 all custom ${tDump} dump.fiber_md.lammpstrj id type mol x y z ix iy iz vx vy vz
+
+# STAGE 0 - pre MD
+# nvt_pre
+timestep ${dtPre}
+fix mdpre all nvt temp 300.0 300.0 100.0
+run ${tS0_pre}
+unfix mdpre
+
+# nvt - step 1
+timestep ${dt}
+fix shake1 all shake 1e-4 1000 0 m 1.0
+fix md1 all nvt temp ${tempS0_hot} ${tempS0_hot} 100.0
+run ${tS0_hot}
+unfix md1
+unfix shake1
+
+# nvt - step 2
+timestep ${dt}
+fix shake2 all shake 1e-4 1000 0 m 1.0
+fix md2 all nvt temp 300.0 300.0 100.0
+run ${tS0_nvt}
+unfix md2
+unfix shake2
+
+# STAGE 1 - compression
+# npt - step 3
+timestep ${dt}
+variable scaledP equal ${fracPress1}*${maxP}
+fix shake3 all shake 1e-4 1000 0 m 1.0
+fix md3 all npt temp 300.0 300.0 100.0 nreset 100 &
+    x ${scaledP} ${scaledP} 1000.0 &
+    y ${scaledP} ${scaledP} 1000.0 &
+    z 1.0 1.0 1000.0 &
+    couple none
+# pressurization loop to avoid neighbor list changes causing crashes
+variable runLoops equal round(${tS1_press}/${pressRunSegments})
+variable dumby equal ${runLoops}
+variable i loop ${dumby}
+label loop3
+run ${pressRunSegments}
+next i
+jump SELF loop3
+# end loop
+unfix md3
+unfix shake3
+
+# nvt - step 4
+timestep ${dt}
+fix shake4 all shake 1e-4 1000 0 m 1.0
+fix md4 all nvt temp ${tempS1_hot} ${tempS1_hot} 100.0
+run ${tS1_hot}
+unfix md4
+unfix shake4
+# nvt - step 5
+timestep ${dt}
+fix shake5 all shake 1e-4 1000 0 m 1.0
+fix md5 all nvt temp 300.0 300.0 100.0
+run ${tS1_nvt}
+unfix md5
+unfix shake5
+
+# npt - step 6
+timestep ${dt}
+variable scaledP equal ${fracPress2}*${maxP}
+fix shake6 all shake 1e-4 1000 0 m 1.0
+fix md6 all npt temp 300.0 300.0 100.0 nreset 100 &
+    x ${scaledP} ${scaledP} 1000.0 &
+    y ${scaledP} ${scaledP} 1000.0 &
+    z 1.0 1.0 1000.0 &
+    couple none
+# pressurization loop to avoid neighbor list changes causing crashes
+variable runLoops equal round(${tS1_press}/${pressRunSegments})
+variable dumby equal ${runLoops}
+variable i loop ${dumby}
+label loop6
+run ${pressRunSegments}
+next i
+jump SELF loop6
+# end loop
+unfix md6
+unfix shake6
+
+# nvt - step 7
+timestep ${dt}
+fix shake7 all shake 1e-4 1000 0 m 1.0
+fix md7 all nvt temp 600.0 600.0 100.0
+run ${tS1_hot}
+unfix md7
+unfix shake7
+# nvt - step 8
+timestep ${dt}
+fix shake8 all shake 1e-4 1000 0 m 1.0
+fix md8 all nvt temp 300.0 300.0 100.0
+run ${tS1_nvt}
+unfix md8
+unfix shake8
+
+# npt - step 6.2
+timestep ${dt}
+variable scaledP equal ${fracPress3}*${maxP}
+fix shake6 all shake 1e-4 1000 0 m 1.0
+fix md6 all npt temp 300.0 300.0 100.0 nreset 100 &
+    x ${scaledP} ${scaledP} 1000.0 &
+    y ${scaledP} ${scaledP} 1000.0 &
+    z 1.0 1.0 1000.0 &
+    couple none
+# pressurization loop to avoid neighbor list changes causing crashes
+variable runLoops equal round(${tS1_press}/${pressRunSegments})
+variable dumby equal ${runLoops}
+variable i loop ${dumby}
+label loop62
+run ${pressRunSegments}
+next i
+jump SELF loop62
+# end loop
+unfix md6
+unfix shake6
+
+# nvt - step 7.2
+timestep ${dt}
+fix shake7 all shake 1e-4 1000 0 m 1.0
+fix md7 all nvt temp 600.0 600.0 100.0
+run ${tS1_hot}
+unfix md7
+unfix shake7
+# nvt - step 8.2
+timestep ${dt}
+fix shake8 all shake 1e-4 1000 0 m 1.0
+fix md8 all nvt temp 300.0 300.0 100.0
+run ${tS1_nvt}
+unfix md8
+unfix shake8
+
+# npt - step 9
+timestep ${dt}
+variable scaledP equal ${maxP}
+fix shake9 all shake 1e-4 1000 0 m 1.0
+fix md9 all npt temp 300.0 300.0 100.0 nreset 100 &
+    x ${scaledP} ${scaledP} 1000.0 &
+    y ${scaledP} ${scaledP} 1000.0 &
+    z 1.0 1.0 1000.0 &
+    couple none
+# pressurization loop to avoid neighbor list changes causing crashes
+variable runLoops equal round(${tS1_press}/${pressRunSegments})
+variable dumby equal ${runLoops}
+variable i loop ${dumby}
+label loop9
+run ${pressRunSegments}
+next i
+jump SELF loop9
+# end loop
+unfix md9
+unfix shake9
+
+# nvt - step 10
+timestep ${dt}
+fix shake10 all shake 1e-4 1000 0 m 1.0
+fix md10 all nvt temp 600.0 600.0 100.0
+run ${tS1_hot}
+unfix md10
+unfix shake10
+# nvt - step 11
+timestep ${dt}
+fix shake11 all shake 1e-4 1000 0 m 1.0
+fix md11 all nvt temp 300.0 300.0 100.0
+fix moment all momentum 1000 linear 1 1 1 angular rescale
+run ${tS1_nvt}
+unfix md11
+unfix shake11
+
+# STAGE 2 - decompression
+# npt - step 12
+timestep ${dt}
+variable scaledP equal ${fracDepress1}*${maxP}
+fix shake12 all shake 1e-4 1000 0 m 1.0
+fix md12 all npt temp 300.0 300.0 100.0 nreset 100 &
+    x ${scaledP} ${scaledP} 1000.0 &
+    y ${scaledP} ${scaledP} 1000.0 &
+    z 1.0 1.0 1000.0 &
+    couple none
+run ${tS2_press}
+unfix md12
+unfix shake12
+
+# nvt - step 13
+timestep ${dt}
+fix shake13 all shake 1e-4 1000 0 m 1.0
+fix md13 all nvt temp ${tempS2_hot} ${tempS2_hot} 100.0
+run ${tS2_hot}
+unfix md13
+unfix shake13
+# nvt - step 14
+timestep ${dt}
+fix shake14 all shake 1e-4 1000 0 m 1.0
+fix md14 all nvt temp 300.0 300.0 100.0
+run ${tS2_nvt}
+unfix md14
+unfix shake14
+
+# npt - step 15
+timestep ${dt}
+variable scaledP equal ${fracDepress2}*${maxP}
+fix shake15 all shake 1e-4 1000 0 m 1.0
+fix md15 all npt temp 300.0 300.0 100.0 nreset 100 &
+    x ${scaledP} ${scaledP} 1000.0 &
+    y ${scaledP} ${scaledP} 1000.0 &
+    z 1.0 1.0 1000.0 &
+    couple none
+run ${tS2_press}
+unfix md15
+unfix shake15
+
+# nvt - step 16
+timestep ${dt}
+fix shake16 all shake 1e-4 1000 0 m 1.0
+fix md16 all nvt temp ${tempS2_hot} ${tempS2_hot} 100.0
+run ${tS2_hot}
+unfix md16
+unfix shake16
+# nvt - step 17
+timestep 1.0
+fix shake17 all shake 1e-4 1000 0 m 1.0
+fix md17 all nvt temp 300.0 300.0 100.0
+run ${tS2_nvt}
+unfix md17
+unfix shake17
+
+# npt - step 18
+timestep ${dt}
+variable scaledP equal ${fracDepress3}*${maxP}
+fix shake18 all shake 1e-4 1000 0 m 1.0
+fix md18 all npt temp 300.0 300.0 100.0 nreset 100 &
+    x ${scaledP} ${scaledP} 1000.0 &
+    y ${scaledP} ${scaledP} 1000.0 &
+    z 1.0 1.0 1000.0 &
+    couple none
+run ${tS2_press}
+unfix md18
+unfix shake18
+
+# nvt - step 19
+timestep ${dt}
+fix shake19 all shake 1e-4 1000 0 m 1.0
+fix md19 all nvt temp ${tempS2_hot} ${tempS2_hot} 100.0
+run ${tS2_hot}
+unfix md19
+unfix shake19
+# nvt - step 20
+timestep ${dt}
+fix shake20 all shake 1e-4 1000 0 m 1.0
+fix md20 all nvt temp 300.0 300.0 100.0
+run ${tS2_nvt}
+unfix md20
+unfix shake20
+
+# STAGE 3 - equilbration
+# npt - step 21 - final equilibration w/o shake constrainsts
+timestep ${dt}
+fix md21 all npt temp 300.0 300.0 100.0 aniso 1.0 1.0 1000.0 nreset 100
+run ${tEq}
+unfix md21
+
+write_dump all custom dump.final_fiber.lammpstrj id x y z xu yu zu vx vy vz fx fy fz modify sort id
+write_data fiber.data
+quit
+
+# change log:
+# 3/11: first adapted amorphous cell production protocol to differential pressure drawing
+#       added another intermediate pressure of frac 0.8
+#       changed tS1_press to 100k from 50k timesteps
+#       remove annealing steps
