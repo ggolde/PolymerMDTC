@@ -1,0 +1,6 @@
+LAMMPS (2 Aug 2023 - Development - patch_2Aug2023-439-g49f08e6231)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:98)
+  using 1 OpenMP thread(s) per MPI task
+# measure thermal conductivity with fix ehex with shake constraints using a variational Muller Plathe method (x-axis)
+# initialization
+log tc_z_ehex.log
